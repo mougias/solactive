@@ -1,0 +1,3 @@
+spring:
+  application:
+    name: Solactive Test App
