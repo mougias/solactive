@@ -30,25 +30,11 @@ class InstrumentStatsCalculatorTests {
 	}
 
 	@Test
-	void cachedStatsAreEmptyBeforeCalculate() {
-		InstrumentStatsCalculator calc = new InstrumentStatsCalculator();
-		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 12.3));
-
-		Stats stats = calc.getCachedStats();
-
-		assertThat(stats, is(not(nullValue())));
-		assertThat(stats.getCount(), equalTo(0L));
-		assertThat(stats.getAvg(), equalTo(0.0));
-		assertThat(stats.getMax(), equalTo(0.0));
-		assertThat(stats.getMin(), equalTo(0.0));
-	}
-
-	@Test
 	void calculationOfSingleElementIsCorrect() {
 		InstrumentStatsCalculator calc = new InstrumentStatsCalculator();
 		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 12.3));
 
-		Stats stats = calc.cleanListAndCalculate();
+		Stats stats = calc.getCachedStats();
 
 		assertThat(stats, is(not(nullValue())));
 		assertThat(stats.getCount(), equalTo(1L));
@@ -62,7 +48,6 @@ class InstrumentStatsCalculatorTests {
 		InstrumentStatsCalculator calc = new InstrumentStatsCalculator();
 		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 12.3));
 
-		calc.cleanListAndCalculate();
 		Stats stats = calc.getCachedStats();
 
 		assertThat(stats, is(not(nullValue())));
@@ -79,7 +64,7 @@ class InstrumentStatsCalculatorTests {
 		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 2.0));
 		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 6.0));
 
-		Stats stats = calc.cleanListAndCalculate();
+		Stats stats = calc.getCachedStats();
 
 		assertThat(stats, is(not(nullValue())));
 		assertThat(stats.getCount(), equalTo(3L));
@@ -97,7 +82,7 @@ class InstrumentStatsCalculatorTests {
 			executor.submit(new Runnable() {
 				@Override
 				public void run() {
-					for (int i = 0; i < 100000; i++) {
+					for (int i = 0; i < 100; i++) {
 						calc.addTick(new InstrumentTick(System.currentTimeMillis(), i));
 					}
 				}
@@ -105,20 +90,20 @@ class InstrumentStatsCalculatorTests {
 		}
 
 		double expectedAvg = 0;
-		for (int i = 0; i < 100000; i++) {
+		for (int i = 0; i < 100; i++) {
 			expectedAvg += i;
 		}
-		expectedAvg /= 100000;
+		expectedAvg /= 100;
 
 		executor.shutdown();
 		boolean timeout = !executor.awaitTermination(59, TimeUnit.SECONDS);
 		assertThat(timeout, is(false));
 
-		Stats stats = calc.cleanListAndCalculate();
-		assertThat(stats.getCount(), equalTo(100000L * 100));
+		Stats stats = calc.getCachedStats();
+		assertThat(stats.getCount(), equalTo(10000L));
 		assertThat(stats.getAvg(), equalTo(expectedAvg));
 		assertThat(stats.getMin(), equalTo(0.0));
-		assertThat(stats.getMax(), equalTo(99999.0));
+		assertThat(stats.getMax(), equalTo(99.0));
 
 	}
 
@@ -141,15 +126,50 @@ class InstrumentStatsCalculatorTests {
 		InstrumentStatsCalculator calc = new InstrumentStatsCalculator();
 		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 1.0));
 
-		Thread.sleep(60 * 1000);
+		Thread.sleep(60 * 1000 + 1);
 		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 2.0));
 		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 6.0));
 
-		Stats stats = calc.cleanListAndCalculate();
+		Stats stats = calc.getCachedStats();
 		assertThat(stats, is(not(nullValue())));
 		assertThat(stats.getCount(), equalTo(2L));
 		assertThat(stats.getAvg(), equalTo(4.0));
 		assertThat(stats.getMax(), equalTo(6.0));
 		assertThat(stats.getMin(), equalTo(2.0));
+	}
+
+	@Test
+	void addNewTickThatIsOldest() {
+		InstrumentStatsCalculator calc = new InstrumentStatsCalculator();
+		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 1.0));
+		calc.addTick(new InstrumentTick(System.currentTimeMillis() - 1000, 5.0));
+
+		Stats stats = calc.getCachedStats();
+		assertThat(stats, is(not(nullValue())));
+		assertThat(stats.getCount(), equalTo(2L));
+		assertThat(stats.getAvg(), equalTo(3.0));
+	}
+
+	@Test
+	void addNewTickInMiddle() {
+		InstrumentStatsCalculator calc = new InstrumentStatsCalculator();
+		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 1.0));
+		calc.addTick(new InstrumentTick(System.currentTimeMillis() - 2000, 5.0));
+		calc.addTick(new InstrumentTick(System.currentTimeMillis() - 1000, 6.0));
+
+		Stats stats = calc.getCachedStats();
+		assertThat(stats, is(not(nullValue())));
+		assertThat(stats.getCount(), equalTo(3L));
+		assertThat(stats.getAvg(), equalTo(4.0));
+	}
+
+	@Test
+	void askCachedStatsAfterHeadExpired() throws InterruptedException {
+		InstrumentStatsCalculator calc = new InstrumentStatsCalculator();
+		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 1.0));
+		Thread.sleep(60 * 1000 + 1);
+		Stats stats = calc.getCachedStats();
+		assertThat(stats, is(not(nullValue())));
+		assertThat(stats.getCount(), equalTo(0L));
 	}
 }

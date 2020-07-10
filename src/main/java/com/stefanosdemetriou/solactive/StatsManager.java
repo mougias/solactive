@@ -3,7 +3,6 @@ package com.stefanosdemetriou.solactive;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import com.stefanosdemetriou.solactive.domain.InstrumentStatsCalculator;
@@ -29,13 +28,22 @@ public class StatsManager {
 			throw new TickTooOldException();
 		}
 
+		long startTime = System.currentTimeMillis();
+
 		instrumentStats.putIfAbsent(tick.getInstrument(), new InstrumentStatsCalculator());
 		instrumentStats.get(tick.getInstrument()).addTick(new InstrumentTick(tick.getTimestamp(), tick.getPrice()));
+		recalculateGlobalStats();
 
+		long elapsedTime = System.currentTimeMillis() - startTime;
+		if (elapsedTime > 1000) {
+			log.warn("Recalculating stats took more than 1 second to complete");
+		}
+		log.trace("Stats recalculation time {}ms", elapsedTime);
 	}
 
 	public Stats getTotalStats() {
-		return globalStats != null ? globalStats : new Stats();
+		recalculateGlobalStats();
+		return globalStats;
 	}
 
 	public Stats getStatsForInstrument(String instrument) throws NoSuchInstrumentException {
@@ -46,18 +54,16 @@ public class StatsManager {
 		return calc.getCachedStats();
 	}
 
-	@Scheduled(fixedRate = 1000)
-	public void calculateAll() {
-		long startTime = System.currentTimeMillis();
-
+	private void recalculateGlobalStats() {
+		// you can't diff recalculate min and max, so need to do this fully
 		Stats newGlobalStats = new Stats();
 		double total = 0;
 		for (InstrumentStatsCalculator calc : instrumentStats.values()) {
-			Stats stats = calc.cleanListAndCalculate();
-			if (newGlobalStats.getCount() == 0 || stats.getMax() > newGlobalStats.getMax()) {
+			Stats stats = calc.getCachedStats();
+			if (newGlobalStats.getCount() == 0 || (stats.getCount() > 0 && stats.getMax() > newGlobalStats.getMax())) {
 				newGlobalStats.setMax(stats.getMax());
 			}
-			if (newGlobalStats.getCount() == 0 || stats.getMin() < newGlobalStats.getMin()) {
+			if (newGlobalStats.getCount() == 0 || (stats.getCount() > 0 && stats.getMin() < newGlobalStats.getMin())) {
 				newGlobalStats.setMin(stats.getMin());
 			}
 			newGlobalStats.setCount(newGlobalStats.getCount() + stats.getCount());
@@ -66,13 +72,7 @@ public class StatsManager {
 		if (newGlobalStats.getCount() > 0) {
 			newGlobalStats.setAvg(total / newGlobalStats.getCount());
 		}
-
 		globalStats = newGlobalStats;
-
-		long elapsedTime = System.currentTimeMillis() - startTime;
-		if (elapsedTime > 1000) {
-			log.warn("Recalculating stats took more than 1 second to complete");
-		}
-		log.trace("Stats recalculation time {}ms", elapsedTime);
 	}
+
 }

@@ -1,42 +1,90 @@
 package com.stefanosdemetriou.solactive.domain;
 
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-
 import com.stefanosdemetriou.solactive.web.dto.Stats;
 
 public class InstrumentStatsCalculator {
 
 	public static final int STATS_MILIS_TTL = 60 * 1000;
 
-	private Stats calculatedStats;
+	private Stats calculatedStats = new Stats();
 
-	private final List<InstrumentTick> ticks = new LinkedList<>();
+	private InstrumentTickListNode head;
+	private InstrumentTickListNode tail;
 
 	public synchronized void addTick(InstrumentTick tick) {
 		long minTime = System.currentTimeMillis() - STATS_MILIS_TTL;
-		if (tick.getTimestamp() > minTime) {
-			ticks.add(tick);
+
+		// while we are here, clear expired ticks
+		cleanExpiredTicks(minTime);
+
+		// new tick is older than time allowed, so ignore it
+		if (tick.getTimestamp() < minTime) {
+			return;
 		}
+
+		// list empty (either first addition, or no addition for TTL)
+		if (tail == null) {
+			tail = new InstrumentTickListNode(tick, null, null);
+			head = tail;
+			calculatedStats = new Stats(tick.getPrice(), tick.getPrice(), tick.getPrice(), 1L);
+			return;
+		}
+
+		// oldest tick we got, should be added first to the list
+		if (head.getTick().getTimestamp() > tick.getTimestamp()) {
+			InstrumentTickListNode newNode = new InstrumentTickListNode(tick, head, null);
+			head.setPrev(newNode);
+			head = newNode;
+			recalculate();
+			return;
+		}
+
+		// ticks should mostly come in sorted by time, so traverse list from last to
+		// first to find where new tick should be placed
+		InstrumentTickListNode current = tail;
+		while (current != null && current.getTick().getTimestamp() > tick.getTimestamp()) {
+			current = current.getPrev();
+		}
+
+		InstrumentTickListNode newNode = new InstrumentTickListNode(tick, current.getNext(), current);
+		if (current.getNext() != null) {
+			current.getNext().setPrev(newNode);
+		}
+		current.setNext(newNode);
+
+		// force recalculation
+		recalculate();
 	}
 
 	public synchronized Stats getCachedStats() {
-		return calculatedStats != null ? calculatedStats : new Stats();
+		// recalculate if needed
+		long minTime = System.currentTimeMillis() - STATS_MILIS_TTL;
+		if (head != null && minTime > head.getTick().getTimestamp()) {
+			cleanExpiredTicks(minTime);
+			recalculate();
+		}
+		return calculatedStats;
 	}
 
-	public synchronized Stats cleanListAndCalculate() {
-		// remove elements older than STATS_MILIS_TIME and calculate stats for the rest
+	private void cleanExpiredTicks(long minTime) {
+		while (head != null && head.getTick().getTimestamp() < minTime) {
+			head = head.getNext();
+		}
+		if (head == null) {
+			tail = null;
+		}
+	}
+
+	private void recalculate() {
 		calculatedStats = new Stats();
+		if (head == null) {
+			return;
+		}
+
+		InstrumentTickListNode current = head;
 		double total = 0;
-		long minTime = System.currentTimeMillis() - STATS_MILIS_TTL;
-		Iterator<InstrumentTick> it = ticks.iterator();
-		while (it.hasNext()) {
-			InstrumentTick tick = it.next();
-			if (tick.getTimestamp() < minTime) {
-				it.remove();
-				continue;
-			}
+		while (current != null) {
+			InstrumentTick tick = current.getTick();
 			total += tick.getPrice();
 			if (calculatedStats.getCount() == 0 || tick.getPrice() < calculatedStats.getMin()) {
 				calculatedStats.setMin(tick.getPrice());
@@ -45,11 +93,11 @@ public class InstrumentStatsCalculator {
 				calculatedStats.setMax(tick.getPrice());
 			}
 			calculatedStats.setCount(calculatedStats.getCount() + 1);
+			current = current.getNext();
 		}
 		if (calculatedStats.getCount() > 0) {
 			calculatedStats.setAvg(total / calculatedStats.getCount());
 		}
-		return calculatedStats;
 	}
 
 }
