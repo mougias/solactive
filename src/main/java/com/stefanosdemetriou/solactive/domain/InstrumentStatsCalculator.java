@@ -56,7 +56,7 @@ public class InstrumentStatsCalculator {
 		return calculatedStats;
 	}
 
-	public void cleanExpiredTicks() {
+	public synchronized void cleanExpiredTicks() {
 		final long minTime = System.currentTimeMillis() - STATS_MILIS_TTL;
 
 		boolean fullRecalc = false;
