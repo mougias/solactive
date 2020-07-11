@@ -12,10 +12,7 @@ public class InstrumentStatsCalculator {
 	private InstrumentTickListNode tail;
 
 	public synchronized void addTick(InstrumentTick tick) {
-		long minTime = System.currentTimeMillis() - STATS_MILIS_TTL;
-
-		// while we are here, clear expired ticks
-		cleanExpiredTicks(minTime);
+		final long minTime = System.currentTimeMillis() - STATS_MILIS_TTL;
 
 		// new tick is older than time allowed, so ignore it
 		if (tick.getTimestamp() < minTime) {
@@ -26,7 +23,7 @@ public class InstrumentStatsCalculator {
 		if (tail == null) {
 			tail = new InstrumentTickListNode(tick, null, null);
 			head = tail;
-			calculatedStats = new Stats(tick.getPrice(), tick.getPrice(), tick.getPrice(), 1L);
+			addSingleTickToStats(tick);
 			return;
 		}
 
@@ -35,7 +32,7 @@ public class InstrumentStatsCalculator {
 			InstrumentTickListNode newNode = new InstrumentTickListNode(tick, head, null);
 			head.setPrev(newNode);
 			head = newNode;
-			recalculate();
+			addSingleTickToStats(tick);
 			return;
 		}
 
@@ -52,27 +49,56 @@ public class InstrumentStatsCalculator {
 		}
 		current.setNext(newNode);
 
-		// force recalculation
-		recalculate();
+		addSingleTickToStats(tick);
 	}
 
 	public synchronized Stats getCachedStats() {
-		// recalculate if needed
-		long minTime = System.currentTimeMillis() - STATS_MILIS_TTL;
-		if (head != null && minTime > head.getTick().getTimestamp()) {
-			cleanExpiredTicks(minTime);
-			recalculate();
-		}
 		return calculatedStats;
 	}
 
-	private void cleanExpiredTicks(long minTime) {
+	public void cleanExpiredTicks() {
+		final long minTime = System.currentTimeMillis() - STATS_MILIS_TTL;
+
+		boolean fullRecalc = false;
+		long removedCount = 0;
+		double removedAmount = 0;
 		while (head != null && head.getTick().getTimestamp() < minTime) {
+			removedCount++;
+			removedAmount += head.getTick().getPrice();
+			fullRecalc = fullRecalc || head.getTick().getPrice() == calculatedStats.getMax()
+					|| head.getTick().getPrice() == calculatedStats.getMin();
 			head = head.getNext();
 		}
 		if (head == null) {
 			tail = null;
+			calculatedStats = new Stats();
+			return;
 		}
+
+		// if we lost min or max then we need full traversal to find the new ones
+		// otherwise we can just diff calc avg and count
+		if (fullRecalc) {
+			recalculate();
+		} else {
+			double newAmount = calculatedStats.getAvg() * calculatedStats.getCount() - removedAmount;
+			long newCount = calculatedStats.getCount() - removedCount;
+			calculatedStats.setAvg(newAmount / newCount);
+			calculatedStats.setCount(newCount);
+		}
+	}
+
+	private void addSingleTickToStats(InstrumentTick tick) {
+		double newAvg = (calculatedStats.getAvg() * calculatedStats.getCount() + tick.getPrice())
+				/ (calculatedStats.getCount() + 1);
+		double min = calculatedStats.getCount() == 0 ? tick.getPrice()
+				: Math.min(tick.getPrice(), calculatedStats.getMin());
+		double max = calculatedStats.getCount() == 0 ? tick.getPrice()
+				: Math.max(tick.getPrice(), calculatedStats.getMax());
+
+		calculatedStats.setAvg(newAvg);
+		calculatedStats.setCount(calculatedStats.getCount() + 1);
+		calculatedStats.setMin(min);
+		calculatedStats.setMax(max);
 	}
 
 	private void recalculate() {

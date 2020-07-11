@@ -7,6 +7,8 @@ import static org.hamcrest.CoreMatchers.nullValue;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 
+import static org.hamcrest.Matchers.closeTo;
+
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -101,7 +103,10 @@ class InstrumentStatsCalculatorTests {
 
 		Stats stats = calc.getCachedStats();
 		assertThat(stats.getCount(), equalTo(10000L));
-		assertThat(stats.getAvg(), equalTo(expectedAvg));
+		
+		// losing some precision is expected because we are doing calculations on doubles
+		// this doesn't have to do with parallel addition of ticks
+		assertThat(stats.getAvg(), closeTo(expectedAvg, 0.0001));
 		assertThat(stats.getMin(), equalTo(0.0));
 		assertThat(stats.getMax(), equalTo(99.0));
 
@@ -119,23 +124,6 @@ class InstrumentStatsCalculatorTests {
 		assertThat(stats.getAvg(), equalTo(0.0));
 		assertThat(stats.getMax(), equalTo(0.0));
 		assertThat(stats.getMin(), equalTo(0.0));
-	}
-
-	@Test
-	void willCleanOldTicks() throws InterruptedException {
-		InstrumentStatsCalculator calc = new InstrumentStatsCalculator();
-		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 1.0));
-
-		Thread.sleep(60 * 1000 + 1);
-		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 2.0));
-		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 6.0));
-
-		Stats stats = calc.getCachedStats();
-		assertThat(stats, is(not(nullValue())));
-		assertThat(stats.getCount(), equalTo(2L));
-		assertThat(stats.getAvg(), equalTo(4.0));
-		assertThat(stats.getMax(), equalTo(6.0));
-		assertThat(stats.getMin(), equalTo(2.0));
 	}
 
 	@Test
@@ -164,12 +152,23 @@ class InstrumentStatsCalculatorTests {
 	}
 
 	@Test
-	void askCachedStatsAfterHeadExpired() throws InterruptedException {
+	void willCleanOldTicks() throws InterruptedException {
 		InstrumentStatsCalculator calc = new InstrumentStatsCalculator();
 		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 1.0));
 		Thread.sleep(60 * 1000 + 1);
+		calc.cleanExpiredTicks();
 		Stats stats = calc.getCachedStats();
 		assertThat(stats, is(not(nullValue())));
 		assertThat(stats.getCount(), equalTo(0L));
+	}
+
+	@Test
+	void willNotCleanNonExpiredTicks() {
+		InstrumentStatsCalculator calc = new InstrumentStatsCalculator();
+		calc.addTick(new InstrumentTick(System.currentTimeMillis(), 1.0));
+		calc.cleanExpiredTicks();
+		Stats stats = calc.getCachedStats();
+		assertThat(stats, is(not(nullValue())));
+		assertThat(stats.getCount(), equalTo(1L));
 	}
 }

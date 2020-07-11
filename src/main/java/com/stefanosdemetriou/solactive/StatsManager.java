@@ -1,7 +1,18 @@
 package com.stefanosdemetriou.solactive;
 
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
+
+import javax.annotation.PostConstruct;
 
 import org.springframework.stereotype.Component;
 
@@ -12,15 +23,50 @@ import com.stefanosdemetriou.solactive.web.dto.Tick;
 import com.stefanosdemetriou.solactive.web.exceptions.NoSuchInstrumentException;
 import com.stefanosdemetriou.solactive.web.exceptions.TickTooOldException;
 
-import lombok.extern.slf4j.Slf4j;
-
 @Component
-@Slf4j
-public class StatsManager {
+public class StatsManager extends Thread {
 
 	private final Map<String, InstrumentStatsCalculator> instrumentStats = new ConcurrentHashMap<>();
 
-	private Stats globalStats;
+	private final ExecutorService executor = Executors
+			.newFixedThreadPool(Runtime.getRuntime().availableProcessors() * 2);
+
+	private AtomicReference<Stats> globalStats = new AtomicReference<>();
+
+	@PostConstruct
+	public void init() {
+		this.start();
+	}
+
+	@Override
+	public void run() {
+		while (!Thread.interrupted()) {
+			List<Callable<Void>> callables = new ArrayList<>();
+			Iterator<InstrumentStatsCalculator> it = instrumentStats.values().iterator();
+			while (it.hasNext()) {
+				InstrumentStatsCalculator calc = it.next();
+				callables.add(new Callable<Void>() {
+					@Override
+					public Void call() throws Exception {
+						calc.cleanExpiredTicks();
+						return null;
+					}
+				});
+			}
+
+			// wait for cleanup of expired ticks on all instruments
+			try {
+				List<Future<Void>> futures = executor.invokeAll(callables);
+				for (Future<Void> future : futures) {
+					future.get();
+				}
+			} catch (InterruptedException | ExecutionException e) {
+				Thread.currentThread().interrupt();
+			}
+
+			recalculateGlobalStats();
+		}
+	}
 
 	public void addTick(Tick tick) throws TickTooOldException {
 		if (tick == null
@@ -28,22 +74,16 @@ public class StatsManager {
 			throw new TickTooOldException();
 		}
 
-		long startTime = System.currentTimeMillis();
-
 		instrumentStats.putIfAbsent(tick.getInstrument(), new InstrumentStatsCalculator());
 		instrumentStats.get(tick.getInstrument()).addTick(new InstrumentTick(tick.getTimestamp(), tick.getPrice()));
-		recalculateGlobalStats();
 
-		long elapsedTime = System.currentTimeMillis() - startTime;
-		if (elapsedTime > 1000) {
-			log.warn("Recalculating stats took more than 1 second to complete");
-		}
-		log.trace("Stats recalculation time {}ms", elapsedTime);
+		recalculateGlobalStats();
 	}
 
-	public Stats getTotalStats() {
-		recalculateGlobalStats();
-		return globalStats;
+	public synchronized Stats getTotalStats() {
+		Stats stats = globalStats.get();
+		stats = (stats == null) ? new Stats() : stats;
+		return stats;
 	}
 
 	public Stats getStatsForInstrument(String instrument) throws NoSuchInstrumentException {
@@ -54,8 +94,10 @@ public class StatsManager {
 		return calc.getCachedStats();
 	}
 
-	private void recalculateGlobalStats() {
-		// you can't diff recalculate min and max, so need to do this fully
+	private synchronized void recalculateGlobalStats() {
+		// recalculate global stats
+		// strictly speaking we could do diff calc but this is an O(n) operation, where
+		// n is just the number of instruments, so we'll leave it for now
 		Stats newGlobalStats = new Stats();
 		double total = 0;
 		for (InstrumentStatsCalculator calc : instrumentStats.values()) {
@@ -72,7 +114,7 @@ public class StatsManager {
 		if (newGlobalStats.getCount() > 0) {
 			newGlobalStats.setAvg(total / newGlobalStats.getCount());
 		}
-		globalStats = newGlobalStats;
+		globalStats.set(newGlobalStats);
 	}
 
 }
